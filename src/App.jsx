@@ -49,9 +49,9 @@ const DEFAULT_SCHEDULES = [
 ];
 
 const DEFAULT_FRIENDS = [
-  { id:"1", name:"Alex", emoji:"🎸", palette:0, scheduleHistory:[{scheduleId:"28-day",cycleStart:"2026-03-01",changedAt:"2026-03-01T00:00:00Z"}] },
-  { id:"2", name:"Jordan", emoji:"🎨", palette:1, scheduleHistory:[{scheduleId:"28-day",cycleStart:"2026-03-05",changedAt:"2026-03-05T00:00:00Z"}] },
-  { id:"3", name:"Sam", emoji:"📚", palette:2, scheduleHistory:[{scheduleId:"7-day",cycleStart:"2026-03-10",changedAt:"2026-03-10T00:00:00Z"}] },
+  { id:"1", name:"Alex", emoji:"🎸", palette:0, description:"", scheduleHistory:[{scheduleId:"28-day",cycleStart:"2026-03-01",changedAt:"2026-03-01T00:00:00Z",notes:""}] },
+  { id:"2", name:"Jordan", emoji:"🎨", palette:1, description:"", scheduleHistory:[{scheduleId:"28-day",cycleStart:"2026-03-05",changedAt:"2026-03-05T00:00:00Z",notes:""}] },
+  { id:"3", name:"Sam", emoji:"📚", palette:2, description:"", scheduleHistory:[{scheduleId:"7-day",cycleStart:"2026-03-10",changedAt:"2026-03-10T00:00:00Z",notes:""}] },
 ];
 
 // ─── Schedule Logic ──────────────────────────────────────────
@@ -76,8 +76,8 @@ function getFriendStatusOnDate(friend, date, schedules) {
   return { status, cycleDay, schedule, entry };
 }
 
-function addScheduleChange(friend, scheduleId, cycleStart) {
-  const newEntry = { scheduleId, cycleStart, changedAt: new Date().toISOString() };
+function addScheduleChange(friend, scheduleId, cycleStart, notes) {
+  const newEntry = { scheduleId, cycleStart, changedAt: new Date().toISOString(), notes: notes || "" };
   const kept = friend.scheduleHistory.filter(e => e.cycleStart < cycleStart);
   return { ...friend, scheduleHistory: [...kept, newEntry].sort((a,b)=>a.cycleStart.localeCompare(b.cycleStart)) };
 }
@@ -378,6 +378,8 @@ function Tracker({ user }) {
   const [saving,setSaving]=useState(false);
   const [csScheduleId,setCsScheduleId]=useState("");
   const [csCycleStart,setCsCycleStart]=useState(todayStr);
+  const [csNotes,setCsNotes]=useState("");
+  const [newDescription,setNewDescription]=useState("");
 
   // Load from Firestore
   useEffect(()=>{
@@ -436,15 +438,17 @@ function Tracker({ user }) {
     if(!newName.trim()) return;
     const id=Date.now().toString();
     const palette=friends.length%PALETTES.length;
-    setFriends([...friends,{id,name:newName.trim(),emoji:newEmoji,palette,scheduleHistory:[{scheduleId:newScheduleId,cycleStart:newCycleStart,changedAt:new Date().toISOString()}]}]);
-    setNewName("");setNewEmoji("😊");setNewScheduleId("28-day");setNewCycleStart(todayStr);setShowAdd(false);
+    setFriends([...friends,{id,name:newName.trim(),emoji:newEmoji,palette,description:newDescription.trim(),scheduleHistory:[{scheduleId:newScheduleId,cycleStart:newCycleStart,changedAt:new Date().toISOString(),notes:""}]}]);
+    setNewName("");setNewEmoji("😊");setNewScheduleId("28-day");setNewCycleStart(todayStr);setNewDescription("");setShowAdd(false);
   };
 
   const removeFriend=(id)=>{setFriends(friends.filter(f=>f.id!==id));setEditingFriend(null);setChangingSchedule(null);setShowHistory(null);};
 
+  const updateDescription=(id,desc)=>{setFriends(friends.map(f=>f.id===id?{...f,description:desc}:f));};
+
   const applyScheduleChange=(friendId)=>{
-    setFriends(friends.map(f=>f.id===friendId?addScheduleChange(f,csScheduleId,csCycleStart):f));
-    setChangingSchedule(null);
+    setFriends(friends.map(f=>f.id===friendId?addScheduleChange(f,csScheduleId,csCycleStart,csNotes):f));
+    setChangingSchedule(null);setCsNotes("");
   };
 
   const saveSchedule=(sched)=>{
@@ -614,6 +618,7 @@ function Tracker({ user }) {
                       {activeSchedule?activeSchedule.name:"Unknown"} · {f.scheduleHistory.length} change{f.scheduleHistory.length!==1?"s":""}
                       {nextGoodIn&&<span style={{ color:"#4CAF50",fontWeight:600 }}> · Best in {nextGoodIn}d</span>}
                     </div>
+                    {f.description&&<div style={{ fontSize:12,color:"#5D5347",marginTop:3,lineHeight:1.4 }}>{f.description}</div>}
                   </div>
                   <div style={{ display:"flex",gap:4,flexShrink:0 }}>
                     <button onClick={()=>{setEditingFriend(isEditing?null:f.id);setChangingSchedule(null);setShowHistory(null);}} style={{ padding:compact?"5px 8px":"6px 12px",borderRadius:8,border:"1px solid #D7D0C7",background:isEditing?p.bg:"transparent",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:p.fg,minHeight:32 }}>{isEditing?"Done":"Edit"}</button>
@@ -623,8 +628,12 @@ function Tracker({ user }) {
                 {activeSchedule&&<div style={{ marginTop:10 }}><ScheduleBar schedule={activeSchedule} currentDay={info.cycleDay} compact={compact}/></div>}
                 {isEditing&&(
                   <div style={{ marginTop:12,padding:compact?10:12,background:"#FAFAF7",borderRadius:8 }}>
+                    <div style={{ marginBottom:10 }}>
+                      <label style={labelStyle}>Description <span style={{ fontWeight:400,textTransform:"none",opacity:0.7 }}>— optional</span></label>
+                      <textarea value={f.description||""} onChange={e=>updateDescription(f.id,e.target.value)} placeholder="Notes about this friend, context, etc." rows={2} style={{ ...inputStyle,resize:"vertical",minHeight:44 }}/>
+                    </div>
                     <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:10 }}>
-                      <button onClick={()=>{setChangingSchedule(isChanging?null:f.id);setCsScheduleId(info.entry?.scheduleId||schedules[0]?.id);setCsCycleStart(todayStr);setShowHistory(null);}} style={{ ...actionBtn,background:isChanging?"#2E3A23":"#FFF",color:isChanging?"#FFF":"#2E3A23" }}>{isChanging?"Cancel":"Change Schedule"}</button>
+                      <button onClick={()=>{setChangingSchedule(isChanging?null:f.id);setCsScheduleId(info.entry?.scheduleId||schedules[0]?.id);setCsCycleStart(todayStr);setCsNotes("");setShowHistory(null);}} style={{ ...actionBtn,background:isChanging?"#2E3A23":"#FFF",color:isChanging?"#FFF":"#2E3A23" }}>{isChanging?"Cancel":"Change Schedule"}</button>
                       <button onClick={()=>{setShowHistory(isHistoryOpen?null:f.id);setChangingSchedule(null);}} style={{ ...actionBtn,background:isHistoryOpen?"#2E3A23":"#FFF",color:isHistoryOpen?"#FFF":"#2E3A23" }}>{isHistoryOpen?"Hide":"History"} ({f.scheduleHistory.length})</button>
                     </div>
                     {isChanging&&(
@@ -635,6 +644,8 @@ function Tracker({ user }) {
                         </div>
                         <label style={labelStyle}>Start Date (Day 1 of new cycle)</label>
                         <input type="date" value={csCycleStart} onChange={e=>setCsCycleStart(e.target.value)} style={{ ...inputStyle,maxWidth:200,marginBottom:10 }}/>
+                        <label style={labelStyle}>Notes <span style={{ fontWeight:400,textTransform:"none",opacity:0.7 }}>— optional</span></label>
+                        <textarea value={csNotes} onChange={e=>setCsNotes(e.target.value)} placeholder="Reason for change, reminders, etc." rows={2} style={{ ...inputStyle,resize:"vertical",minHeight:44,marginBottom:10 }}/>
                         <button onClick={()=>applyScheduleChange(f.id)} style={{ padding:"10px 20px",borderRadius:8,border:"none",background:"#2E3A23",color:"#FFF",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit" }}>Apply Change</button>
                       </div>
                     )}
@@ -643,13 +654,14 @@ function Tracker({ user }) {
                         <label style={labelStyle}>Schedule History</label>
                         {[...f.scheduleHistory].sort((a,b)=>b.cycleStart.localeCompare(a.cycleStart)).map((entry,idx)=>{
                           const sched=schedules.find(s=>s.id===entry.scheduleId);const isActive=entry===getActiveEntry(f,today);
-                          return (<div key={idx} style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:idx<f.scheduleHistory.length-1?"1px solid #F2EDE6":"none" }}>
-                            <div style={{ width:8,height:8,borderRadius:"50%",background:isActive?"#4CAF50":"#D7D0C7",flexShrink:0 }}/>
+                          return (<div key={idx} style={{ display:"flex",alignItems:"flex-start",gap:8,padding:"8px 0",borderBottom:idx<f.scheduleHistory.length-1?"1px solid #F2EDE6":"none" }}>
+                            <div style={{ width:8,height:8,borderRadius:"50%",background:isActive?"#4CAF50":"#D7D0C7",flexShrink:0,marginTop:5 }}/>
                             <div style={{ flex:1,minWidth:0 }}>
                               <div style={{ fontSize:13,fontWeight:600,color:"#2E3A23" }}>{sched?.name||"Deleted schedule"}</div>
                               <div style={{ fontSize:11,color:"#7A8B6A" }}>From {parseDate(entry.cycleStart).toLocaleDateString("default",{month:"short",day:"numeric",year:"numeric"})}<span style={{ opacity:0.6 }}> · changed {new Date(entry.changedAt).toLocaleDateString("default",{month:"short",day:"numeric"})}</span></div>
+                              {entry.notes&&<div style={{ fontSize:12,color:"#5D5347",marginTop:3,padding:"4px 8px",background:"#FAFAF7",borderRadius:6,fontStyle:"italic",lineHeight:1.4 }}>{entry.notes}</div>}
                             </div>
-                            {isActive&&<span style={{ fontSize:9,fontWeight:700,color:"#4CAF50",background:"#E8F5E9",padding:"2px 6px",borderRadius:4 }}>ACTIVE</span>}
+                            {isActive&&<span style={{ fontSize:9,fontWeight:700,color:"#4CAF50",background:"#E8F5E9",padding:"2px 6px",borderRadius:4,flexShrink:0 }}>ACTIVE</span>}
                           </div>);
                         })}
                       </div>
@@ -665,6 +677,7 @@ function Tracker({ user }) {
                 <h4 style={{ margin:"0 0 12px 0",fontFamily:"'DM Serif Display',serif",fontWeight:400,fontSize:compact?16:18 }}>New Friend</h4>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Name</label><input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Friend's name" style={inputStyle} autoFocus/></div>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Emoji</label><div style={{ display:"flex",flexWrap:"wrap",gap:5 }}>{EMOJIS.map(e=>(<button key={e} onClick={()=>setNewEmoji(e)} style={{ width:compact?34:36,height:compact?34:36,borderRadius:8,border:newEmoji===e?"2px solid #2E3A23":"1px solid #DDD",background:newEmoji===e?"#F0ECE3":"#FFF",fontSize:compact?16:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>{e}</button>))}</div></div>
+                <div style={{ marginBottom:12 }}><label style={labelStyle}>Description <span style={{ fontWeight:400,textTransform:"none",opacity:0.7 }}>— optional</span></label><textarea value={newDescription} onChange={e=>setNewDescription(e.target.value)} placeholder="Notes about this friend, context, etc." rows={2} style={{ ...inputStyle,resize:"vertical",minHeight:44 }}/></div>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Schedule</label><div style={{ display:"flex",flexWrap:"wrap",gap:4 }}>{schedules.map(s=>(<button key={s.id} onClick={()=>setNewScheduleId(s.id)} style={{ padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",border:newScheduleId===s.id?"2px solid #2E3A23":"1px solid #D7D0C7",background:newScheduleId===s.id?"#F0ECE3":"#FFF",color:"#2E3A23" }}>{s.name} ({s.cycleLength}d)</button>))}</div></div>
                 <div style={{ marginBottom:14 }}><label style={labelStyle}>Cycle Start Date (Day 1)</label><input type="date" value={newCycleStart} onChange={e=>setNewCycleStart(e.target.value)} style={{ ...inputStyle,maxWidth:220 }}/></div>
                 <div style={{ display:"flex",gap:8 }}>
