@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
-import { auth, db, googleProvider } from "./firebase";
+import { auth, db, storage, googleProvider } from "./firebase";
 import { signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
 // ─── Constants ───────────────────────────────────────────────
 const DAYS_LABEL = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -82,6 +83,13 @@ function addScheduleChange(friend, scheduleId, cycleStart) {
   return { ...friend, scheduleHistory: [...kept, newEntry].sort((a,b)=>a.cycleStart.localeCompare(b.cycleStart)) };
 }
 
+// ─── Storage helpers ─────────────────────────────────────────
+async function uploadFriendIcon(uid, friendId, file) {
+  const r = storageRef(storage, `avatars/${uid}/${friendId}`);
+  await uploadBytes(r, file);
+  return getDownloadURL(r);
+}
+
 // ─── Firestore helpers ───────────────────────────────────────
 function getUserDocRef(uid) { return doc(db, "users", uid); }
 
@@ -108,8 +116,12 @@ function FriendBadge({ friend, size="md", status }) {
   return (<div title={friend.name} style={{
     width:s,height:s,borderRadius:"50%",background:p.bg,border:`2px solid ${border}`,
     display:"flex",alignItems:"center",justifyContent:"center",fontSize:fs,flexShrink:0,
-    boxShadow:status==="good"?"0 0 6px rgba(76,175,80,0.35)":"none",
-  }}>{friend.emoji}</div>);
+    boxShadow:status==="good"?"0 0 6px rgba(76,175,80,0.35)":"none",overflow:"hidden",
+  }}>
+    {friend.avatarUrl
+      ? <img src={friend.avatarUrl} style={{width:"100%",height:"100%",objectFit:"cover"}} alt={friend.name}/>
+      : friend.emoji}
+  </div>);
 }
 
 function CycleRing({ friend, targetDate, size=56, schedules }) {
@@ -128,7 +140,9 @@ function CycleRing({ friend, targetDate, size=56, schedules }) {
           strokeLinecap="round" style={{ transition:"stroke-dashoffset 0.4s" }}/>
       </svg>
       <div style={{ position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center" }}>
-        <span style={{ fontSize:size*0.3,lineHeight:1 }}>{friend.emoji}</span>
+        {friend.avatarUrl
+          ? <img src={friend.avatarUrl} style={{width:size*0.52,height:size*0.52,borderRadius:"50%",objectFit:"cover"}} alt={friend.name}/>
+          : <span style={{ fontSize:size*0.3,lineHeight:1 }}>{friend.emoji}</span>}
         <span style={{ fontSize:Math.max(size*0.16,8),fontWeight:700,color:cfg.color,lineHeight:1,marginTop:1 }}>D{cycleDay}</span>
       </div>
     </div>
@@ -378,6 +392,11 @@ function Tracker({ user }) {
   const [saving,setSaving]=useState(false);
   const [csScheduleId,setCsScheduleId]=useState("");
   const [csCycleStart,setCsCycleStart]=useState(todayStr);
+  const [newIconFile,setNewIconFile]=useState(null);
+  const [newIconPreview,setNewIconPreview]=useState(null);
+  const [changingIcon,setChangingIcon]=useState(null);
+  const [editIconFile,setEditIconFile]=useState(null);
+  const [editIconPreview,setEditIconPreview]=useState(null);
 
   // Load from Firestore
   useEffect(()=>{
@@ -432,12 +451,26 @@ function Tracker({ user }) {
     return bestCount>0?best:null;
   },[weekDates,friends,schedules]);
 
-  const addFriend=()=>{
+  const addFriend=async()=>{
     if(!newName.trim()) return;
     const id=Date.now().toString();
     const palette=friends.length%PALETTES.length;
-    setFriends([...friends,{id,name:newName.trim(),emoji:newEmoji,palette,scheduleHistory:[{scheduleId:newScheduleId,cycleStart:newCycleStart,changedAt:new Date().toISOString()}]}]);
+    let avatarUrl=undefined;
+    if(newIconFile){ try{ avatarUrl=await uploadFriendIcon(user.uid,id,newIconFile); }catch(e){ console.error("Icon upload failed",e); } }
+    setFriends([...friends,{id,name:newName.trim(),emoji:newEmoji,palette,...(avatarUrl&&{avatarUrl}),scheduleHistory:[{scheduleId:newScheduleId,cycleStart:newCycleStart,changedAt:new Date().toISOString()}]}]);
     setNewName("");setNewEmoji("😊");setNewScheduleId("28-day");setNewCycleStart(todayStr);setShowAdd(false);
+    if(newIconPreview) URL.revokeObjectURL(newIconPreview);
+    setNewIconFile(null);setNewIconPreview(null);
+  };
+
+  const updateFriendIcon=async(friendId)=>{
+    if(!editIconFile) return;
+    try{
+      const url=await uploadFriendIcon(user.uid,friendId,editIconFile);
+      setFriends(friends.map(f=>f.id===friendId?{...f,avatarUrl:url}:f));
+    }catch(e){ console.error("Icon upload failed",e); }
+    if(editIconPreview) URL.revokeObjectURL(editIconPreview);
+    setEditIconFile(null);setEditIconPreview(null);setChangingIcon(null);
   };
 
   const removeFriend=(id)=>{setFriends(friends.filter(f=>f.id!==id));setEditingFriend(null);setChangingSchedule(null);setShowHistory(null);};
@@ -616,7 +649,7 @@ function Tracker({ user }) {
                     </div>
                   </div>
                   <div style={{ display:"flex",gap:4,flexShrink:0 }}>
-                    <button onClick={()=>{setEditingFriend(isEditing?null:f.id);setChangingSchedule(null);setShowHistory(null);}} style={{ padding:compact?"5px 8px":"6px 12px",borderRadius:8,border:"1px solid #D7D0C7",background:isEditing?p.bg:"transparent",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:p.fg,minHeight:32 }}>{isEditing?"Done":"Edit"}</button>
+                    <button onClick={()=>{setEditingFriend(isEditing?null:f.id);setChangingSchedule(null);setShowHistory(null);setChangingIcon(null);if(editIconPreview)URL.revokeObjectURL(editIconPreview);setEditIconFile(null);setEditIconPreview(null);}} style={{ padding:compact?"5px 8px":"6px 12px",borderRadius:8,border:"1px solid #D7D0C7",background:isEditing?p.bg:"transparent",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:p.fg,minHeight:32 }}>{isEditing?"Done":"Edit"}</button>
                     <button onClick={()=>removeFriend(f.id)} style={{ padding:compact?"5px 7px":"6px 10px",borderRadius:8,border:"1px solid #FFCDD2",background:"transparent",fontSize:11,cursor:"pointer",fontFamily:"inherit",color:"#EF5350",minHeight:32 }}>✗</button>
                   </div>
                 </div>
@@ -624,8 +657,9 @@ function Tracker({ user }) {
                 {isEditing&&(
                   <div style={{ marginTop:12,padding:compact?10:12,background:"#FAFAF7",borderRadius:8 }}>
                     <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:10 }}>
-                      <button onClick={()=>{setChangingSchedule(isChanging?null:f.id);setCsScheduleId(info.entry?.scheduleId||schedules[0]?.id);setCsCycleStart(todayStr);setShowHistory(null);}} style={{ ...actionBtn,background:isChanging?"#2E3A23":"#FFF",color:isChanging?"#FFF":"#2E3A23" }}>{isChanging?"Cancel":"Change Schedule"}</button>
-                      <button onClick={()=>{setShowHistory(isHistoryOpen?null:f.id);setChangingSchedule(null);}} style={{ ...actionBtn,background:isHistoryOpen?"#2E3A23":"#FFF",color:isHistoryOpen?"#FFF":"#2E3A23" }}>{isHistoryOpen?"Hide":"History"} ({f.scheduleHistory.length})</button>
+                      <button onClick={()=>{setChangingSchedule(isChanging?null:f.id);setCsScheduleId(info.entry?.scheduleId||schedules[0]?.id);setCsCycleStart(todayStr);setShowHistory(null);setChangingIcon(null);}} style={{ ...actionBtn,background:isChanging?"#2E3A23":"#FFF",color:isChanging?"#FFF":"#2E3A23" }}>{isChanging?"Cancel":"Change Schedule"}</button>
+                      <button onClick={()=>{setShowHistory(isHistoryOpen?null:f.id);setChangingSchedule(null);setChangingIcon(null);}} style={{ ...actionBtn,background:isHistoryOpen?"#2E3A23":"#FFF",color:isHistoryOpen?"#FFF":"#2E3A23" }}>{isHistoryOpen?"Hide":"History"} ({f.scheduleHistory.length})</button>
+                      <button onClick={()=>{const opening=changingIcon!==f.id;setChangingIcon(opening?f.id:null);if(editIconPreview)URL.revokeObjectURL(editIconPreview);setEditIconFile(null);setEditIconPreview(null);setChangingSchedule(null);setShowHistory(null);}} style={{ ...actionBtn,background:changingIcon===f.id?"#2E3A23":"#FFF",color:changingIcon===f.id?"#FFF":"#2E3A23" }}>{changingIcon===f.id?"Cancel":"Change Icon"}</button>
                     </div>
                     {isChanging&&(
                       <div style={{ padding:10,background:"#FFF",borderRadius:8,border:"1px solid #E4DDD4",marginBottom:8 }}>
@@ -636,6 +670,22 @@ function Tracker({ user }) {
                         <label style={labelStyle}>Start Date (Day 1 of new cycle)</label>
                         <input type="date" value={csCycleStart} onChange={e=>setCsCycleStart(e.target.value)} style={{ ...inputStyle,maxWidth:200,marginBottom:10 }}/>
                         <button onClick={()=>applyScheduleChange(f.id)} style={{ padding:"10px 20px",borderRadius:8,border:"none",background:"#2E3A23",color:"#FFF",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit" }}>Apply Change</button>
+                      </div>
+                    )}
+                    {changingIcon===f.id&&(
+                      <div style={{ padding:10,background:"#FFF",borderRadius:8,border:"1px solid #E4DDD4",marginBottom:8 }}>
+                        <label style={labelStyle}>Custom Icon</label>
+                        <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:10 }}>
+                          {(editIconPreview||f.avatarUrl)&&<img src={editIconPreview||f.avatarUrl} style={{ width:48,height:48,borderRadius:"50%",objectFit:"cover",border:"2px solid #2E3A23",flexShrink:0 }} alt="preview"/>}
+                          <label style={{ padding:"8px 14px",borderRadius:8,border:"1px solid #C5BEAD",background:"#FFF",fontSize:12,fontWeight:600,cursor:"pointer",color:"#4A5D3A" }}>
+                            {editIconPreview?"Change photo":"Upload photo"}
+                            <input type="file" accept="image/*" style={{ display:"none" }} onChange={e=>{const file=e.target.files[0];if(file){if(editIconPreview)URL.revokeObjectURL(editIconPreview);setEditIconFile(file);setEditIconPreview(URL.createObjectURL(file));}}}/>
+                          </label>
+                        </div>
+                        <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                          <button onClick={()=>updateFriendIcon(f.id)} disabled={!editIconFile} style={{ padding:"10px 20px",borderRadius:8,border:"none",background:editIconFile?"#2E3A23":"#C5BEAD",color:"#FFF",fontWeight:700,fontSize:13,cursor:editIconFile?"pointer":"default",fontFamily:"inherit" }}>Save Icon</button>
+                          {f.avatarUrl&&<button onClick={()=>{setFriends(friends.map(fr=>fr.id===f.id?{...fr,avatarUrl:null}:fr));setChangingIcon(null);}} style={{ padding:"10px 14px",borderRadius:8,border:"1px solid #FFCDD2",background:"transparent",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:"#EF5350" }}>Remove icon</button>}
+                        </div>
                       </div>
                     )}
                     {isHistoryOpen&&(
@@ -665,6 +715,17 @@ function Tracker({ user }) {
                 <h4 style={{ margin:"0 0 12px 0",fontFamily:"'DM Serif Display',serif",fontWeight:400,fontSize:compact?16:18 }}>New Friend</h4>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Name</label><input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Friend's name" style={inputStyle} autoFocus/></div>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Emoji</label><div style={{ display:"flex",flexWrap:"wrap",gap:5 }}>{EMOJIS.map(e=>(<button key={e} onClick={()=>setNewEmoji(e)} style={{ width:compact?34:36,height:compact?34:36,borderRadius:8,border:newEmoji===e?"2px solid #2E3A23":"1px solid #DDD",background:newEmoji===e?"#F0ECE3":"#FFF",fontSize:compact?16:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }}>{e}</button>))}</div></div>
+                <div style={{ marginBottom:12 }}>
+                  <label style={labelStyle}>Custom Photo (optional)</label>
+                  <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                    {newIconPreview&&<img src={newIconPreview} style={{ width:44,height:44,borderRadius:"50%",objectFit:"cover",border:"2px solid #2E3A23",flexShrink:0 }} alt="preview"/>}
+                    <label style={{ padding:"8px 14px",borderRadius:8,border:"1px solid #C5BEAD",background:"#FFF",fontSize:12,fontWeight:600,cursor:"pointer",color:"#4A5D3A" }}>
+                      {newIconPreview?"Change photo":"Upload photo"}
+                      <input type="file" accept="image/*" style={{ display:"none" }} onChange={e=>{const file=e.target.files[0];if(file){if(newIconPreview)URL.revokeObjectURL(newIconPreview);setNewIconFile(file);setNewIconPreview(URL.createObjectURL(file));}}}/>
+                    </label>
+                    {newIconPreview&&<button onClick={()=>{URL.revokeObjectURL(newIconPreview);setNewIconFile(null);setNewIconPreview(null);}} style={{ fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #FFCDD2",background:"transparent",color:"#EF5350",cursor:"pointer",fontFamily:"inherit" }}>Remove</button>}
+                  </div>
+                </div>
                 <div style={{ marginBottom:12 }}><label style={labelStyle}>Schedule</label><div style={{ display:"flex",flexWrap:"wrap",gap:4 }}>{schedules.map(s=>(<button key={s.id} onClick={()=>setNewScheduleId(s.id)} style={{ padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",border:newScheduleId===s.id?"2px solid #2E3A23":"1px solid #D7D0C7",background:newScheduleId===s.id?"#F0ECE3":"#FFF",color:"#2E3A23" }}>{s.name} ({s.cycleLength}d)</button>))}</div></div>
                 <div style={{ marginBottom:14 }}><label style={labelStyle}>Cycle Start Date (Day 1)</label><input type="date" value={newCycleStart} onChange={e=>setNewCycleStart(e.target.value)} style={{ ...inputStyle,maxWidth:220 }}/></div>
                 <div style={{ display:"flex",gap:8 }}>
